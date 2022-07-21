@@ -13,6 +13,7 @@ import utility { FilePath, ArgsParser }
 import lexer { Lexer }
 import parser { Parser }
 import typechecker { Typechecker }
+import ide
 
 function usage() => "usage: jakt [-h] [OPTIONS] <path>"
 function help() -> String{

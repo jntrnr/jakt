@@ -1,0 +1,219 @@
+import parser { BinaryOperator, FunctionLinkage }
+import typechecker {
+    BuiltinType, CheckedBlock, CheckedCall, CheckedExpression,
+    CheckedFunction, CheckedProgram, CheckedStatement, CheckedStruct,
+    Module, ModuleId, Scope, ScopeId, StructId, EnumId, Type, TypeId, expression_type,
+    CheckedEnum, unknown_type_id, CheckedMatchCase, FunctionId, CheckedMatchBody, void_type_id,
+    CheckedVariable, NumberConstant}
+import utility { panic, todo, join, prepend_to_each, Span }
+import compiler { Compiler }
+
+enum Mutability {
+    DoesNotApply
+    Immutable
+    Mutable
+}
+
+enum VarType {
+    Variable
+    Field
+}
+
+enum VarVisibility {
+    DoesNotApply
+    Public
+    Private
+    Restricted
+}
+
+enum Usage {
+    Variable(
+        span: Span
+        name: String 
+        type_id: TypeId 
+        mutability: Mutability 
+        var_type: VarType)
+    Call(FunctionId)
+    Typename(TypeId)
+    NameSet([String])
+    EnumVariant(
+        span: Span
+        name: String
+        type_id: TypeId
+        variants: [(String?, TypeId)]
+        number_constant: NumberConstant?
+    ) 
+}
+
+function find_definition_in_program(program: CheckedProgram, span: Span) throws -> Span {
+    let result = find_span_in_program(program, span)
+    if result.has_value() {
+        return match result! {
+            Variable(span) => span
+            Call(function_id) => program.get_function(function_id).name_span
+            Typename(type_id) => find_type_definition_for_type_id(program, type_id, span)
+            NameSet() => span
+            EnumVariant(span) => span
+        }
+    } else {
+        return span
+    }
+}
+
+function find_type_definition_for_type_id(program: CheckedProgram, type_id: TypeId, span: Span) throws -> Span {
+    let array_struct_id = program.find_struct_in_prelude("Array")
+    let dictionary_struct_id = program.find_struct_in_prelude("Dictionary")
+    let optional_struct_id = program.find_struct_in_prelude("Optional")
+    let range_struct_id = program.find_struct_in_prelude("Range")
+    let set_struct_id = program.find_struct_in_prelude("Set")
+    let tuple_struct_id = program.find_struct_in_prelude("Tuple")
+    let weak_ptr_struct_id = program.find_struct_in_prelude("WeakPtr")
+
+    return match program.get_type(type_id) {
+        F32 => span
+        F64 => span
+        I8 => span
+        I16 => span
+        I32 => span
+        I64 => span
+        U8 => span
+        U16 => span
+        U32 => span
+        U64 => span
+        Usize => span
+        CChar => span
+        CInt => span
+        Bool => span
+        Void => span
+        Unknown => span
+        JaktString => span
+        GenericInstance(id: struct_id, args) => {
+            mut output = span
+            if struct_id.equals(array_struct_id) or struct_id.equals(optional_struct_id) or struct_id.equals(range_struct_id) or struct_id.equals(set_struct_id) or struct_id.equals(tuple_struct_id) or struct_id.equals(weak_ptr_struct_id) {
+                output = find_type_definition_for_type_id(program, type_id: args[0], span)
+            } else if struct_id.equals(dictionary_struct_id) {
+                output = find_type_definition_for_type_id(program, type_id: args[1], span)
+            } else {
+                output = program.get_struct(struct_id).name_span
+            }
+            yield output
+        }
+        Struct(struct_id) => program.get_struct(struct_id).name_span
+        GenericEnumInstance(id) => program.get_enum(id).name_span
+        Enum(id) => program.get_enum(id).name_span
+        RawPtr(type_id) => find_type_definition_for_type_id(program, type_id, span)
+        TypeVariable() => span
+        GenericResolvedType(id) => program.get_struct(struct_id).name_span
+    }
+}
+
+function find_span_in_program(program: CheckedProgram, span: Span) throws -> Usage? {
+    mut iterator = program.modules.iterator()
+    iterator.next()
+    for module in iterator {
+        let scope = program.get_scope(ScopeId(module_id: module.id, id: 0))
+
+        return find_span_in_scope(program, scope, span)
+    }
+
+    return None
+}
+
+function find_span_in_scope(program: CheckedProgram, scope: Scope, span: Span) throws -> Usage? {
+    for scope_var in scope.vars.iterator() {
+        let var = program.get_variable(scope_var.1)
+        if var.definition_span.contains(span) {
+            return Some(Usage::Typename(var.type_id))
+        }
+    }
+
+    for function_id in scope.functions.iterator() {
+        let function = program.get_function(function_id.1)
+        let usage = find_span_in_function(program, function, span)
+        if usage.has_value() {
+            return usage!
+        }
+    }
+
+    for struct_id in scope.structs.iterator() {
+        let checked_struct = program.get_struct(struct_id.1)
+        let usage = find_span_in_struct(program, checked_struct, span)
+        if usage.has_value() {
+            return usage!
+        }
+    }
+
+    for enum_id in scope.enums.iterator() {
+        let checked_enum = program.get_enum(enum_id.1)
+        let usage = find_span_in_enum(program, checked_enum, span)
+        if usage.has_value() {
+            return usage!
+        }
+    }
+
+    for child in scope.children.iterator() {
+        let scope = program.get_scope(child)
+
+        let usage = find_span_in_scope(program, scope, span)
+        if usage.has_value() {
+            return usage!
+        }
+    }
+
+    return None
+}
+
+function find_span_in_function(program: CheckedProgram, function: CheckedFunction, span: Span) -> Usage? {
+    // FIXME: add return_type_span
+    // if let Some(return_type_span) = function.return_type_span {
+    //     if return_type_span.contains(span) {
+    //         return Some(Usage::Typename(function.return_type_id));
+    //     }
+    // }
+
+    for param in function.params.iterator() {
+        if param.variable.definition_span.contains(span) {
+            return Some(Usage::Typename(param.variable.type_id))
+        }
+    }
+    
+    return find_span_in_block(program, block: function.block, span)
+}
+
+function find_span_in_struct(program: CheckedProgram, checked_struct: CheckedStruct, span: Span) -> Usage? {
+    let scope = program.get_scope(checked_struct.scope_id)
+
+    for field in checked_struct.fields.iterator() {
+        let variable = program.get_variable(field.0)
+
+        if variable.definition_span.contains(span) {
+            return Some(Usage::Typename(field.type_id))
+        }
+    }
+
+    let usage = find_span_in_scope(program, scope, contains(span))
+
+    return usage
+}
+
+function find_span_in_enum(program: CheckedProgram, checked_enum: CheckedEnum, span: Span) -> Usage? {
+    let scope = program.get_scope(checked_enum.scope_id)
+
+    for variant in checked_enum.variants.iterator() {
+        match variant {
+            StructLike(name, fields, span: variant_span) => {
+                for field in fields.iterator() {
+                    let var = program.get_variable(field)
+
+                    if var.definition_span.contains(span) {
+                        return Some(Usage::Typename(field.type_id))
+                    }
+                }
+
+                if variant_span.contains(span) {
+                    return Some(Usage::EnumVariant())
+                }
+            }
+        }
+    }
+}
