@@ -27,6 +27,7 @@ function help() -> String{
     output += "  -d\t\tInsert debug statement spans in generated C++ code.\n"
     output += "  --debug-print\t\tOutput debug print.\n"
     output += "  --prettify-cpp-source\t\tRun emitted C++ source through clang-format.\n" // FIXME: Add -p flag to be the same as rust compiler.
+    output += "  -j,--json-errors\t\tEmit machine-readable (JSON) errors.\n"
 
     output += "\nOptions:\n"
     output += "  -F,--clang-format-path PATH\t\tPath to clang-format executable.\n\t\tDefaults to clang-format\n"
@@ -68,6 +69,7 @@ function main(args: [String]) {
     let codegen_debug = args_parser.flag(["-d"])
     let debug_print = args_parser.flag(["--debug-print"])
     let prettify_cpp_source = args_parser.flag(["--prettify-cpp-source"])
+    let json_errors = args_parser.flag(["-j","--json-errors"])
 
     let clang_format_path = args_parser.option(["-F", "--clang-format-path"]) ?? "clang-format"
     let runtime_path = args_parser.option(["-R", "--runtime-path"]) ?? "runtime"
@@ -122,6 +124,7 @@ function main(args: [String]) {
         dump_parser: parser_debug
         ignore_parser_errors: false
         debug_print: debug_print
+        json_errors
     )
 
     let main_file_id = compiler.get_file_id_or_register(file_path)
