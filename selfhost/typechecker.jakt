@@ -1088,6 +1088,12 @@ struct Typechecker {
     inside_defer: bool
     checkidx: usize
     ignore_errors: bool
+    dump_type_hints: bool
+
+    function dump_type_hint(this, type_id: TypeId, span: Span) throws {
+        println("{{\"type\":\"hint\",\"file_id\":{},\"position\":{},\"typename\":\"{}\"}}"
+                span.file_id, span.end, .type_name(type_id))
+    }
 
     function typecheck(mut compiler: Compiler, parsed_namespace: ParsedNamespace) throws -> CheckedProgram {
 
@@ -1108,6 +1114,7 @@ struct Typechecker {
             inside_defer: false
             checkidx: 0uz
             ignore_errors: false
+            dump_type_hints: compiler.dump_type_hints
         )
 
         typechecker.include_prelude()
@@ -2629,7 +2636,9 @@ struct Typechecker {
                             )
                             params.push(CheckedParameter(requires_label: true, variable: checked_var))
 
-                            // TODO: dump type hints
+                            if .dump_type_hints {
+                                .dump_type_hint(type_id, span: param.span)
+                            }
 
                             mut module = .current_module()
                             let var_id = module.add_variable(checked_var)
@@ -4257,6 +4266,7 @@ struct Typechecker {
                             name: "_magic",
                             parsed_type: ParsedType::Empty,
                             is_mutable: iterable_should_be_mutable,
+                            inlay_span: None,
                             span: name_span
                         ),
                         init: range
@@ -4272,6 +4282,7 @@ struct Typechecker {
                                         name: "_magic_value",
                                         parsed_type: ParsedType::Empty,
                                         is_mutable: iterable_should_be_mutable,
+                                        inlay_span: None,
                                         span: name_span
                                     ),
                                     init: ParsedExpression::MethodCall(
@@ -4325,6 +4336,7 @@ struct Typechecker {
                                     // FIXME: loop variable mutability should be independent
                                     // of iterable mutability
                                     is_mutable: iterable_should_be_mutable,
+                                    inlay_span: name_span,
                                     span: name_span
                                     ),
                                     init: ParsedExpression::ForcedUnwrap(
@@ -4479,13 +4491,16 @@ struct Typechecker {
             visibility: Visibility::Public
         )
 
-        // TODO: dump type hints
+        if .dump_type_hints and var.inlay_span.has_value() {
+            .dump_type_hint(type_id: lhs_type_id, span: var.inlay_span!)
+        }
 
         mut module = .current_module()
         let var_id = module.add_variable(checked_var)
         .add_var_to_scope(scope_id, name: var.name, var_id, span: checked_var.definition_span)
         return CheckedStatement::VarDecl(var_id, init: checked_expr, span)
     }
+
 
     function typecheck_while(mut this, condition: ParsedExpression, block: ParsedBlock, scope_id: ScopeId, safety_mode: SafetyMode, span: Span) throws -> CheckedStatement {
         let checked_condition = .typecheck_expression(condition, scope_id, safety_mode, type_hint: None)
@@ -5409,7 +5424,10 @@ struct Typechecker {
                                                 true => {
                                                     let substituted_type_id = .substitute_typevars_in_type(type_id: matched_field_variable!.type_id, generic_inferences: [:])
                                                     let matched_span = matched_field_variable!.definition_span
-                                                    // FIXME: dump type hints
+                                                    if .dump_type_hints {
+                                                        .dump_type_hint(type_id:
+                                                            matched_field_variable!.type_id, span: arg.span)
+                                                    }
 
                                                    let var_id = module.add_variable(CheckedVariable(
                                                         name: arg.binding

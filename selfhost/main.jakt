@@ -28,6 +28,8 @@ function help() -> String{
     output += "  --debug-print\t\tOutput debug print.\n"
     output += "  --prettify-cpp-source\t\tRun emitted C++ source through clang-format.\n" // FIXME: Add -p flag to be the same as rust compiler.
     output += "  -j,--json-errors\t\tEmit machine-readable (JSON) errors.\n"
+    output += "  -H,--type-hints\t\tEmit machine-readable type hints (for IDE integration).\n"
+    output += "  -c,--check-only\t\tOnly check the code for errors.\n"
 
     output += "\nOptions:\n"
     output += "  -F,--clang-format-path PATH\t\tPath to clang-format executable.\n\t\tDefaults to clang-format\n"
@@ -70,6 +72,8 @@ function main(args: [String]) {
     let debug_print = args_parser.flag(["--debug-print"])
     let prettify_cpp_source = args_parser.flag(["--prettify-cpp-source"])
     let json_errors = args_parser.flag(["-j","--json-errors"])
+    let dump_type_hints = args_parser.flag(["-H", "--type-hints"])
+    let check_only = args_parser.flag(["-c", "--check-only"])
 
     let clang_format_path = args_parser.option(["-F", "--clang-format-path"]) ?? "clang-format"
     let runtime_path = args_parser.option(["-R", "--runtime-path"]) ?? "runtime"
@@ -125,6 +129,7 @@ function main(args: [String]) {
         ignore_parser_errors: false
         debug_print: debug_print
         json_errors
+        dump_type_hints
     )
 
     let main_file_id = compiler.get_file_id_or_register(file_path)
@@ -160,6 +165,10 @@ function main(args: [String]) {
 
     if not compiler.errors.is_empty() {
         return 1
+    }
+
+    if check_only {
+        return 0
     }
 
     let output = CodeGenerator::generate(compiler, checked_program, debug_info: codegen_debug)

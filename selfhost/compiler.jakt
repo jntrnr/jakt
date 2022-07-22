@@ -13,6 +13,7 @@ class Compiler {
     public ignore_parser_errors: bool
     public debug_print: bool
     public json_errors: bool
+    public dump_type_hints: bool
 
     public function panic(this, anon message: String) throws {
         .print_errors()
