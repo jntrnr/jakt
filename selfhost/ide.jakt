@@ -29,9 +29,9 @@ enum VarVisibility {
 enum Usage {
     Variable(
         span: Span
-        name: String 
-        type_id: TypeId 
-        mutability: Mutability 
+        name: String
+        type_id: TypeId
+        mutability: Mutability
         var_type: VarType
         visibility: VarVisibility
         struct_type_id: TypeId?)
@@ -44,7 +44,7 @@ enum Usage {
         type_id: TypeId
         variants: [(String?, TypeId)]
         number_constant: NumberConstant?
-    ) 
+    )
 }
 
 function find_definition_in_program(program: CheckedProgram, span: Span) throws -> Span {
@@ -127,7 +127,7 @@ function find_type_definition_in_program(program: CheckedProgram, span: Span) th
     if result.has_value() {
         return match result! {
             Variable(span, type_id) => {
-               yield find_type_definition_for_type_id(program, type_id, span) 
+               yield find_type_definition_for_type_id(program, type_id, span)
             }
             Call(function_id) => {
                 yield program.get_function(function_id).name_span
@@ -145,7 +145,7 @@ function find_type_definition_in_program(program: CheckedProgram, span: Span) th
 
 function find_typename_in_program(program: CheckedProgram, span: Span) throws -> String? {
     let result = find_span_in_program(program, span)
-    
+
     if result.has_value() {
         return match result! {
             Variable(name, type_id, mutability, var_type, visibility, struct_type_id) => {
@@ -273,7 +273,7 @@ function find_span_in_function(program: CheckedProgram, checked_function: Checke
             return Some(Usage::Typename(param.variable.type_id))
         }
     }
-    
+
     //FIXME: return find_span_in_block(program, block: function.block, span)
     return None
 }
@@ -319,7 +319,154 @@ function get_type_signature(program: CheckedProgram, type_id: TypeId) throws -> 
     let tuple_struct_id = program.find_struct_in_prelude("Tuple")
     let weak_ptr_struct_id = program.find_struct_in_prelude("WeakPtr")
 
-    return "" // FIXME
+    let type = program.get_type(type_id)
+
+    return match type {
+        Void => "void"
+        Bool => "bool"
+        U8 => "u8"
+        U16 => "u16"
+        U32 => "u32"
+        U64 => "u64"
+        I8 => "i8"
+        I16 => "i16"
+        I32 => "i32"
+        I64 => "i64"
+        F32 => "f32"
+        F64 => "f64"
+        Usize => "usize"
+        JaktString => "String"
+        CInt => "c_int"
+        CChar => "c_char"
+        TypeVariable(name) => name
+        Unknown => ""
+        RawPtr(type_id) => "raw " + get_type_signature(program, type_id)
+        Enum(id) => {
+            let enum_ = program.get_enum(id)
+            yield match enum_.is_boxed {
+                true => "boxed "
+                else => ""
+            } + "enum " + enum_.name
+        }
+        Struct(id) => {
+            let struct_ = program.get_struct(id)
+            yield match struct_.record_type {
+                Class => "class "
+                Struct => "struct "
+                else => {
+                    panic("unreachable: should've been struct")
+                    yield ""
+                }
+            } + struct_.name
+        }
+        GenericResolvedType(id, args) => {
+            let record = program.get_struct(id)
+            mut output = record.name
+            output += "<"
+            if not args.is_empty() {
+                output += get_type_signature(program, type_id: args[0])
+                for i in 1..args.size() {
+                    output += ", "
+                    output += get_type_signature(program, type_id: args[i])
+                }
+            }
+            yield output + ">"
+        }
+        GenericEnumInstance(id, args) => {
+            let enum_ = program.get_enum(id)
+            mut output = ""
+            if enum_.is_boxed {
+                output += "boxed "
+            }
+            output += "enum "
+            output += enum_.name
+            output += "<"
+            if not args.is_empty() {
+                output += get_type_signature(program, type_id: args[0])
+                for i in 1..args.size() {
+                    output += ", "
+                    output += get_type_signature(program, type_id: args[i])
+                }
+            }
+            yield output + ">"
+        }
+        GenericInstance(id, args) => {
+            if id.equals(array_struct_id) {
+                if args.is_empty() {
+                    return "[]"
+                }
+                return format("[{}]", get_type_signature(program, type_id: args[0]))
+            }
+            if id.equals(dictionary_struct_id) {
+                if args.size() < 2 {
+                    return "[:]"
+                }
+                return format("[{}: {}]",
+                    get_type_signature(program, type_id: args[0])
+                    get_type_signature(program, type_id: args[1]))
+            }
+            if id.equals(optional_struct_id) {
+                if args.is_empty() {
+                    return ""
+                }
+                return format("{}?", get_type_signature(program, type_id: args[0]))
+            }
+            if id.equals(range_struct_id) {
+                if args.is_empty() {
+                    return ""
+                }
+                // Ranges probably only make sense for builtin types, but if not we use the format
+                // struct MyRangeStruct..MyRangeStruct
+                return format("{}..{}",
+                    get_type_signature(program, type_id: args[0])
+                    program.type_name(args[0]))
+            }
+            if id.equals(set_struct_id) {
+                if args.is_empty() {
+                    return ""
+                }
+                return format("{{{}}}", get_type_signature(program, type_id: args[0]))
+            }
+            if id.equals(tuple_struct_id) {
+                mut output = "("
+                if not args.is_empty() {
+                    output += get_type_signature(program, type_id: args[0])
+                    for i in 1..args.size() {
+                        output += ", "
+                        output += get_type_signature(program, type_id: args[i])
+                    }
+                }
+                return output + ")"
+            }
+            if id.equals(weak_ptr_struct_id) {
+                if args.is_empty() {
+                    return ""
+                }
+                return format("weak {}?", get_type_signature(program, type_id: args[0]))
+            }
+
+            let record = program.get_struct(id)
+            mut output = match record.record_type {
+                Class => "class "
+                Struct => "struct "
+                ValueEnum | SumEnum => {
+                    panic("unreachable: can't be an enum")
+                    yield ""
+                }
+                Garbage => ""
+            }
+            output += record.name
+            output += "<"
+            if not args.is_empty() {
+                output += get_type_signature(program, type_id: args[0])
+                for i in 1..args.size() {
+                    output += ", "
+                    output += get_type_signature(program, type_id: args[i])
+                }
+            }
+            yield output + ">"
+        }
+    }
 }
 
 function enum_variant_fields(program: CheckedProgram, checked_enum_variant: CheckedEnumVariant) throws -> [(String?, TypeId)] {
