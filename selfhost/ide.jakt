@@ -261,7 +261,7 @@ function find_span_in_struct(program: CheckedProgram, checked_struct: CheckedStr
     return usage
 }
 
-function find_span_in_function(program: CheckedProgram, checked_function: CheckedFunction, span: Span) -> Usage? {
+function find_span_in_function(program: CheckedProgram, checked_function: CheckedFunction, span: Span) throws -> Usage? {
     if checked_function.return_type_span.has_value() {
         if checked_function.return_type_span!.contains(span) {
             return Some(Usage::Typename(type_id: checked_function.return_type_id))
@@ -274,8 +274,362 @@ function find_span_in_function(program: CheckedProgram, checked_function: Checke
         }
     }
 
-    //FIXME: return find_span_in_block(program, block: function.block, span)
+    return find_span_in_block(program, block: checked_function.block, span)
+}
+
+function find_span_in_block(program: CheckedProgram, block: CheckedBlock, span: Span) throws -> Usage? {
+    for statement in block.statements.iterator() {
+        let found = find_span_in_statement(program, statement, span)
+        if found.has_value() {
+            return found
+        }
+    }
     return None
+}
+
+function find_span_in_statement(program: CheckedProgram, statement: CheckedStatement, span: Span) throws -> Usage? =>
+    match statement {
+        Block(block) => find_span_in_block(program, block, span)
+        Defer(statement) => find_span_in_statement(program, statement, span)
+        Expression(expr) => find_span_in_expression(program, expr, span)
+        If(condition, then_block, else_statement) => {
+            mut found = find_span_in_expression(program, expr: condition, span)
+            if found.has_value() {
+                return found
+            }
+            found = find_span_in_block(program, block: then_block, span)
+            if found.has_value() {
+                return found
+            }
+            if else_statement.has_value() {
+                return find_span_in_statement(program, statement: else_statement!, span)
+            }
+            yield None
+        }
+        InlineCpp => None
+        Loop(block) => find_span_in_block(program, block, span)
+        Return(val) => match val.has_value() {
+            true => find_span_in_expression(program, expr: val!, span)
+            else => None
+        }
+        Throw(expr) => find_span_in_expression(program, expr, span)
+        Try(stmt, error_name, catch_block) => {
+            let found = find_span_in_statement(program, statement: stmt, span)
+            if found.has_value() {
+                return found
+            }
+            yield find_span_in_block(program, block: catch_block, span)
+        }
+        VarDecl(var_id, init) => {
+            let found = find_span_in_expression(program, expr: init, span)
+            if found.has_value() {
+                return found
+            }
+            let var = program.get_variable(var_id)
+            if var.type_span.has_value() {
+                let type_span = var.type_span!
+                if type_span.contains(span) {
+                    return Some(Usage::Typename(var.type_id))
+                }
+            }
+
+            if var.definition_span.contains(span) {
+                let mutability = match var.is_mutable {
+                    true => Mutability::Mutable
+                    else => Mutability::Immutable
+                }
+
+                return Some(Usage::Variable(
+                        span: var.definition_span
+                        name: var.name
+                        type_id: var.type_id
+                        mutability
+                        var_type: VarType::Variable
+                        visibility: VarVisibility::DoesNotApply
+                        struct_type_id: None))
+            }
+            yield None
+        }
+        While(condition, block) => {
+            let found = find_span_in_expression(program, expr: condition, span)
+            if found.has_value() {
+                return found
+            }
+            yield find_span_in_block(program, block, span)
+        }
+        DestructuringAssignment(vars, var_decl) => {
+            for var in vars.iterator() {
+                let found = find_span_in_statement(program, statement: var, span)
+                if found.has_value() {
+                    return found
+                }
+            }
+            yield find_span_in_statement(program, statement: var_decl, span)
+        }
+        Yield(expr) => find_span_in_expression(program, expr, span)
+        Break | Continue | Garbage => None
+    }
+
+function find_span_in_expression(program: CheckedProgram, expr: CheckedExpression, span: Span) throws -> Usage? { return match expr {
+    BinaryOp(lhs, op, rhs) => {
+        let found = find_span_in_expression(program, expr: lhs, span)
+        if found.has_value() {
+            return found
+        }
+        yield find_span_in_expression(program, expr: rhs, span)
+    }
+    JaktArray(vals, repeat) => {
+        for val in vals.iterator() {
+            let found = find_span_in_expression(program, expr: val, span)
+            if found.has_value() {
+                return found
+            }
+        }
+        if repeat.has_value() {
+            return find_span_in_expression(program, expr: repeat!, span)
+        }
+        yield None
+    }
+    Block(block) => find_span_in_block(program, block, span)
+    Call(call, span: call_span) => {
+        for arg in call.args.iterator() {
+            let found = find_span_in_expression(program, expr: arg.1, span)
+            if found.has_value() {
+                return found
+            }
+        }
+        if call.function_id.has_value() and call_span.contains(span) {
+            return Some(Usage::Call(call.function_id!))
+        }
+        yield None
+    }
+    JaktDictionary(vals) => {
+        for item in vals.iterator() {
+            let key = item.0
+            let value = item.1
+            mut found = find_span_in_expression(program, expr: key, span)
+            if found.has_value() {
+                return found
+            }
+            found = find_span_in_expression(program, expr: value, span)
+            if found.has_value() {
+                return found
+            }
+        }
+        yield None
+    }
+    IndexedExpression(expr, index) => {
+        mut found = find_span_in_expression(program, expr, span)
+        if found.has_value() {
+            return found
+        }
+        found = find_span_in_expression(program, expr: index, span)
+        if found.has_value() {
+            return found
+        }
+        yield None
+    }
+    IndexedStruct(expr, index, span: index_span, type_id) => {
+        let found = find_span_in_expression(program, expr, span)
+        if found.has_value() {
+            return found
+        }
+        if index_span.contains(span) {
+            match program.get_type(type_id) {
+                Struct(struct_id) => {
+                    let struct_ = program.get_struct(struct_id)
+                    for field in struct_.fields.iterator() {
+                        let var = program.get_variable(field)
+                        if index == var.name {
+                            return Some(Usage::Variable(
+                                    span: var.definition_span
+                                    name: index
+                                    type_id: var.type_id
+                                    mutability: Mutability::DoesNotApply
+                                    var_type: VarType::Field
+                                    visibility: match var.visibility {
+                                        Public => VarVisibility::Public
+                                        Private => VarVisibility::Private
+                                        Restricted => VarVisibility::Restricted
+                                    }
+                                    struct_type_id: Some(type_id)))
+                        }
+                    }
+                }
+                else => {}
+            }
+        }
+        yield None
+    }
+    IndexedDictionary(expr, index) => {
+        let found = find_span_in_expression(program, expr, span)
+        if found.has_value() {
+            return found
+        }
+        yield find_span_in_expression(program, expr: index, span)
+    }
+    Match(expr, match_cases, span: match_span, type_id) => {
+        for match_case in match_cases.iterator() {
+            let found = match match_case {
+                EnumVariant(name, args, subject_type_id, index, scope_id, body, marker_span) => {
+                    if marker_span.contains(span) {
+                        // FIXME: return Some(get_enum_variant_usage_from_type_id_and_name(program, type_id: subject_type_id, variant_index))
+                        return Some(get_enum_variant_usage_from_type_id_and_name(
+                                program
+                                type_id: subject_type_id
+                                name))
+                    }
+
+                    yield match body {
+                        Block(block) => find_span_in_block(program, block, span)
+                        Expression(expr) => find_span_in_expression(program, expr, span)
+                    }
+                }
+                Expression(expression: expr, body) => {
+                    let found = find_span_in_expression(program, expr, span)
+                    if found.has_value() {
+                        return found
+                    }
+                    yield match body {
+                        Block(block) => find_span_in_block(program, block, span)
+                        Expression(expr) => find_span_in_expression(program, expr, span)
+                    }
+                }
+                CatchAll(body, marker_span) => match marker_span.contains(span) {
+                    true => {
+                        let all_cases = match program.get_type(type_id) {
+                            Enum(enum_id) | GenericEnumInstance(id: enum_id) => {
+                                // NOTE: not sure why would we need a hashset if enum variants
+                                // can't be duplicate, but I'll leave previous implementation from Rust based
+                                mut names: {String} = {}
+                                let enum_ = program.get_enum(enum_id)
+                                    for variant in enum_.variants.iterator() {
+                                        names.add(variant.name())
+                                    }
+                                yield names
+                            }
+                            else => {yield {"else (expression)"}}
+                        }
+
+                        mut remaining_cases = all_cases
+
+                        for other_case in match_cases.iterator() {
+                            match other_case {
+                                EnumVariant(name) => {
+                                    remaining_cases.remove(name)
+                                }
+                                else => {}
+                            }
+                        }
+
+                        yield match remaining_cases.is_empty() {
+                            false => {
+                                mut cases_array: [String] = []
+                                    cases_array.ensure_capacity(remaining_cases.size())
+                                    for name in remaining_cases.iterator() {
+                                        cases_array.push(name)
+                                    }
+                                yield Some(Usage::NameSet(cases_array))
+                            }
+                            else => None
+                        }
+                    }
+                    else => match body {
+                        Block(block) => find_span_in_block(program, block, span)
+                            Expression(expr) => find_span_in_expression(program, expr, span)
+                    }
+                }
+
+            }
+            if found.has_value() {
+                return found
+            }
+        }
+        yield find_span_in_expression(program, expr, span)
+    }
+
+    ForcedUnwrap(expr) => find_span_in_expression(program, expr, span)
+    UnaryOp(expr) => find_span_in_expression(program, expr, span)
+    MethodCall(expr, call, span: method_span, type_id) => {
+        mut found = find_span_in_expression(program, expr, span)
+        if found.has_value() {
+            return found
+        }
+        for arg in call.args.iterator() {
+            found = find_span_in_expression(program, expr: arg.1, span)
+            if found.has_value() {
+                return found
+            }
+        }
+        if call.function_id.has_value() and method_span.contains(span) {
+            return Some(Usage::Call(call.function_id!))
+        }
+        return None
+    }
+    Var(var, span: var_span) => {
+        if var_span.contains(span) {
+            let mutability = match var.is_mutable {
+                true => Mutability::Mutable
+                else => Mutability::Immutable
+            }
+            return Some(Usage::Variable(
+                    span: var.definition_span
+                    name: var.name
+                    type_id: var.type_id
+                    mutability
+                    var_type: VarType::Variable
+                    visibility: VarVisibility::DoesNotApply
+                    struct_type_id: None))
+        }
+        return None
+    }
+
+    NamespacedVar(namespaces, var, span: var_span) => {
+        if var_span.contains(span) and not namespaces.is_empty()  {
+            let last_ns = namespaces.last()!
+            if program.get_scope(last_ns.scope).namespace_name.has_value() {
+                let enum_id = program.find_enum_in_scope(scope_id:
+                    last_ns.scope, name: last_ns.name)
+
+                if enum_id.has_value() {
+                    let enum_ = program.get_enum(enum_id!)
+                    return Some(get_enum_variant_usage_from_type_id_and_name(program, type_id: enum_.type_id name: var.name))
+                }
+
+            }
+        }
+        yield None
+    }
+    else => None
+}}
+
+function get_enum_variant_usage_from_type_id_and_name(program: CheckedProgram, type_id: TypeId, name: String) throws -> Usage {
+
+    for enum_ in program.get_module(type_id.module).enums.iterator() {
+        if not enum_.type_id.equals(type_id) {
+            continue
+        }
+
+        for variant in enum_.variants.iterator() {
+            if variant.name() == name {
+                let variants = enum_variant_fields(program, checked_enum_variant: variant)
+                let number_constant = match variant {
+                    WithValue(name, expr) => expr.to_number_constant(program)
+                    else => None
+                }
+                let span = variant.span()
+                return Usage::EnumVariant(
+                    span
+                    name
+                    type_id
+                    variants
+                    number_constant)
+            }
+        }
+        panic("unreachable: should have found variant")
+    }
+    panic("unreachable: should have found enum")
+    return Usage::Typename(type_id)
 }
 
 function get_var_signature(program: CheckedProgram, name: String, var_type_id: TypeId, mutability: Mutability, var_type: VarType, visibility: VarVisibility, struct_type_id: TypeId?) throws -> String {
