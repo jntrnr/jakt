@@ -471,6 +471,7 @@ struct CheckedVariable {
     type_id: TypeId
     is_mutable: bool
     definition_span: Span
+    type_span: Span?
     visibility: Visibility
 }
 
@@ -946,17 +947,17 @@ class CheckedProgram {
         if id.id > max_scope {
             .compiler.panic(format("scope_id {} does not exist in module", id))
         }
-        
+
         return .modules[id.module_id.id].scopes[id.id]
-    } 
+    }
 
     public function prelude_scope_id(this) -> ScopeId => ScopeId(module_id: ModuleId(id: 0), id: 0)
 
     public function set_loaded_module(mut this, module_name: String, loaded_module: LoadedModule) throws {
         .loaded_modules.set(
             key: module_name
-            value: loaded_module 
-        )  
+            value: loaded_module
+        )
     }
     public function get_loaded_module(this, anon module_name: String) -> LoadedModule? {
         return .loaded_modules.get(module_name)
@@ -1000,7 +1001,7 @@ class CheckedProgram {
         return .is_integer(type_id) or .is_floating(type_id)
     }
 
-    public function is_string(this, anon type_id: TypeId) -> bool => .get_type(type_id) is JaktString 
+    public function is_string(this, anon type_id: TypeId) -> bool => .get_type(type_id) is JaktString
 
     public function get_bits(this, anon type_id: TypeId) => .get_type(type_id).get_bits()
 
@@ -1070,7 +1071,7 @@ class CheckedProgram {
                     )
                 }
             }
-            
+
             .compiler.panic("should be unreachable")
             return None // FIXME: control flow analysis
         } else {
@@ -1462,7 +1463,7 @@ struct Typechecker {
         .compiler.print_errors()
 
         return parsed_namespace
-    } 
+    }
 
     function find_struct_in_prelude(this, anon name: String) throws -> StructId =>
         .program.find_struct_in_prelude(name)
@@ -1869,6 +1870,7 @@ struct Typechecker {
                 type_id: checked_member_type
                 is_mutable: parsed_var_decl.is_mutable
                 definition_span: parsed_var_decl.span
+                type_span: None
                 visibility: unchecked_member.visibility
             ))
             structure.fields.push(var_id)
@@ -1960,7 +1962,7 @@ struct Typechecker {
                             parent_scope_id: scope_id
                             name: imported_name.name
                             enum_id: maybe_enum_id!
-                            span: imported_name.span 
+                            span: imported_name.span
                         )
                     }
 
@@ -1970,7 +1972,7 @@ struct Typechecker {
                     name: imported_name.name
                 )
                     if maybe_type_id.has_value() {
-                        // NOTE: what should we do if this returns false? error is already created in the type itself and rust compiler goes on 
+                        // NOTE: what should we do if this returns false? error is already created in the type itself and rust compiler goes on
                         .add_type_to_scope(
                             parent_scope_id: scope_id
                             type_name: imported_name.name
@@ -1985,7 +1987,7 @@ struct Typechecker {
                     name: imported_name.name
                 )
                     if maybe_struct_id.has_value() {
-                        // NOTE: what should we do if this returns false? error is already created in the struct itself and rust compiler goes on 
+                        // NOTE: what should we do if this returns false? error is already created in the struct itself and rust compiler goes on
                         .add_struct_to_scope(
                             parent_scope_id: scope_id
                             name: imported_name.name
@@ -2005,7 +2007,7 @@ struct Typechecker {
 
             if import_.is_c and not f.generic_parameters.is_empty() {
                 .error_with_hint(
-                    format("imported function '{}' is declared to have C linkage, but is generic",f.name) 
+                    format("imported function '{}' is declared to have C linkage, but is generic",f.name)
                     f.name_span
                     "this function may not be generic"
                     f.name_span)
@@ -2016,7 +2018,7 @@ struct Typechecker {
                         f.name_span)
             }
 
-        }       
+        }
 
         for record in import_.assigned_namespace.records.iterator() {
             if not record.definition_linkage is External {
@@ -2025,10 +2027,10 @@ struct Typechecker {
             }
             if import_.is_c and not record.generic_parameters.is_empty() {
                 .error_with_hint(
-                    format("imported {} '{}' is declared to have C linkage, but is generic", 
-                        record.record_type.record_type_name() 
+                    format("imported {} '{}' is declared to have C linkage, but is generic",
+                        record.record_type.record_type_name()
                         record.name)
-                    record.name_span, 
+                    record.name_span,
                     format("this {} may not be generic", record.record_type.record_type_name())
                     record.name_span)
             }
@@ -2076,8 +2078,8 @@ struct Typechecker {
             }
             debug_name += ")"
             let namespace_scope_id = .create_scope(
-                parent_scope_id: scope_id 
-                can_throw: false 
+                parent_scope_id: scope_id
+                can_throw: false
                 debug_name)
             mut child_scope = .get_scope(namespace_scope_id)
             child_scope.namespace_name = namespce.name
@@ -2277,6 +2279,7 @@ struct Typechecker {
                         type_id: enum_type_id
                         is_mutable: param.variable.is_mutable
                         definition_span: param.variable.span
+                        type_span: None
                         visibility: Visibility::Public
                     )
 
@@ -2292,6 +2295,7 @@ struct Typechecker {
                         type_id: param_type
                         is_mutable: param.variable.is_mutable
                         definition_span: param.variable.span
+                        type_span: param.variable.parsed_type.span()
                         visibility: Visibility::Public
                     )
 
@@ -2414,6 +2418,7 @@ struct Typechecker {
                         type_id: struct_type_id
                         is_mutable: param.variable.is_mutable
                         definition_span: param.variable.span
+                        type_span: None
                         visibility: Visibility::Public
                     )
 
@@ -2434,6 +2439,7 @@ struct Typechecker {
                         type_id: param_type
                         is_mutable: param.variable.is_mutable
                         definition_span: param.variable.span
+                        type_span: param.variable.parsed_type.span()
                         visibility: Visibility::Public
                     )
 
@@ -2595,13 +2601,14 @@ struct Typechecker {
                                 parsed_type: underlying_type
                             )
                         }
-                        
+
                         enum_.variants.push(CheckedEnumVariant::WithValue(name: variant.name, expr, span: variant.span))
                         let var_id = module.add_variable(CheckedVariable(
                             name: variant.name
                             type_id: enum_.type_id
                             is_mutable: false
                             definition_span: variant.span
+                            type_span: None
                             visibility: Visibility::Public
                         ))
                         .add_var_to_scope(scope_id: enum_.scope_id, name: variant.name, var_id, span: variant.span)
@@ -2614,7 +2621,7 @@ struct Typechecker {
                     if seen_names.contains(variant.name) {
                         .error(format("Enum variant '{}' is defined more than once", variant.name), variant.span)
                         continue
-                    } 
+                    }
                     seen_names.add(variant.name)
                     let is_structlike = variant.params.has_value() and variant.params!.size() > 0 and variant.params![0].name != ""
                     let is_typed = variant.params.has_value() and variant.params!.size() == 1 and variant.params![0].name == ""
@@ -2635,6 +2642,7 @@ struct Typechecker {
                                 type_id
                                 is_mutable: param.is_mutable
                                 definition_span: param.span
+                                type_span: None
                                 visibility: Visibility::Public
                             )
                             params.push(CheckedParameter(requires_label: true, variable: checked_var))
@@ -2687,6 +2695,7 @@ struct Typechecker {
                                 type_id
                                 is_mutable: false
                                 definition_span: param.span
+                                type_span: None
                                 visibility: Visibility::Public
                             )
                             let checked_function = CheckedFunction(
@@ -2999,6 +3008,7 @@ struct Typechecker {
                 type_id
                 is_mutable: parameter.variable.is_mutable
                 definition_span: parameter.variable.span
+                type_span: None
                 visibility: Visibility::Public
             )
 
@@ -3340,7 +3350,7 @@ struct Typechecker {
                 let lhs_args = args
 
                 // If lhs is T? or weak T? and rhs is T, skip type compat check
-                if (lhs_struct_id.equals(optional_struct_id)) or 
+                if (lhs_struct_id.equals(optional_struct_id)) or
                     (lhs_struct_id.equals(weakptr_struct_id)) {
                     if lhs_args.size() > 0 {
                         if (lhs_args[0].equals(rhs_type_id)) {
@@ -3707,7 +3717,7 @@ struct Typechecker {
         return checked_block
     }
 
-    function typecheck_typename(mut this, parsed_type: ParsedType, scope_id: ScopeId) throws -> TypeId { 
+    function typecheck_typename(mut this, parsed_type: ParsedType, scope_id: ScopeId) throws -> TypeId {
         match parsed_type {
             NamespacedName(name, namespaces, params, span) => {
                 mut current_namespace_scope_id = scope_id
@@ -4228,7 +4238,7 @@ struct Typechecker {
         //     1- Must respond to .next(); the mutability of the iterator is inferred from .next()'s signature
         //     2- The result of .next() must be an Optional.
 
-        let iterable_expr = .typecheck_expression(range, scope_id, safety_mode, type_hint: None) 
+        let iterable_expr = .typecheck_expression(range, scope_id, safety_mode, type_hint: None)
         mut iterable_should_be_mutable = false
 
 
@@ -4418,7 +4428,7 @@ struct Typechecker {
         } else {
             .error("Tuple inner types sould have same size as tuple members", span)
         }
-        
+
         return CheckedStatement::DestructuringAssignment(vars: var_decls, var_decl: checked_tuple_var_decl, span)
     }
 
@@ -4491,6 +4501,7 @@ struct Typechecker {
             type_id: lhs_type_id
             is_mutable: var.is_mutable
             definition_span: var.span
+            type_span: None
             visibility: Visibility::Public
         )
 
@@ -4528,6 +4539,7 @@ struct Typechecker {
             type_id: .get_struct(error_struct_id).type_id
             is_mutable: false
             definition_span: error_span
+            type_span: None
             visibility: Visibility::Public
         )
         mut module = .current_module()
@@ -4936,7 +4948,11 @@ struct Typechecker {
                 else => {
                     .error(format("Variable '{}' not found", name), span)
                     yield CheckedExpression::Var(
-                        var: CheckedVariable(name, type_id: type_hint.value_or(unknown_type_id()), is_mutable: false, definition_span: span, visibility: Visibility::Public), span
+                        var: CheckedVariable(name, type_id:
+                            type_hint.value_or(unknown_type_id()), is_mutable:
+                            false, definition_span: span,
+                            type_span: None
+                            visibility: Visibility::Public), span
                     )
                 }
             }
@@ -4996,7 +5012,7 @@ struct Typechecker {
             let array_struct_id = .find_struct_in_prelude("Array")
             let dictionary_struct_id = .find_struct_in_prelude("Dictionary")
             mut expr_type_id = unknown_type_id()
-            
+
             yield match .get_type(expression_type(checked_base)) {
                 GenericInstance(id, args) => {
                     mut result = CheckedExpression::Garbage(span)
@@ -5108,6 +5124,7 @@ struct Typechecker {
                 type_id: unknown_type_id(),
                 is_mutable: false,
                 definition_span: span
+                type_span: None
                 visibility: Visibility::Public
             ),
             span
@@ -5124,7 +5141,7 @@ struct Typechecker {
             let fill_size_type = expression_type(fill_size_checked)
             if not .is_integer(fill_size_type) {
                 .error(
-                    format("Type '{}' is not convertible to an integer. Only integer values can be array fill size expressions.", .type_name(fill_size_type)), 
+                    format("Type '{}' is not convertible to an integer. Only integer values can be array fill size expressions.", .type_name(fill_size_type)),
                     fill_size_value.span()
                 )
             }
@@ -5369,11 +5386,12 @@ struct Typechecker {
                                                     type_id: variable_type_id
                                                     is_mutable: false
                                                     definition_span: span
+                                                    type_span: None
                                                     visibility: Visibility::Public
                                                 ))
                                                 .add_var_to_scope(scope_id: new_scope_id, name: variant_argument.binding, var_id, span)
                                             }
-                                        } 
+                                        }
                                     }
                                     StructLike(name, fields) => {
                                         covered_variants.add(name)
@@ -5437,6 +5455,7 @@ struct Typechecker {
                                                         type_id: substituted_type_id
                                                         is_mutable: false
                                                         definition_span: matched_span
+                                                        type_span: None
                                                         visibility: Visibility::Public
                                                     ))
                                                     .add_var_to_scope(scope_id: new_scope_id, name: arg.binding, var_id, span)
@@ -5642,7 +5661,7 @@ struct Typechecker {
                 }
             }
         }
-        
+
         return CheckedExpression::Match(expr: checked_expr, match_cases: checked_cases, span, type_id: final_result_type ?? void_type_id(), all_variants_constant: true)
     }
 
@@ -5893,7 +5912,7 @@ struct Typechecker {
 
                     args.push((call.name, checked_arg))
                 }
-                
+
                 if call.name == "format" {
                     return_type = builtin(BuiltinType::String)
                     callee_throws = true
@@ -6029,7 +6048,7 @@ struct Typechecker {
                         span
                     )
                 }
-                
+
                 for generic_typevar in callee.generic_params.iterator() {
                     match generic_typevar {
                         Parameter(id) => {
