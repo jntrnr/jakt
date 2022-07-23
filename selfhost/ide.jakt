@@ -4,7 +4,7 @@ import typechecker {
     CheckedFunction, CheckedProgram, CheckedStatement, CheckedStruct,
     Module, ModuleId, Scope, ScopeId, StructId, EnumId, Type, TypeId, expression_type,
     CheckedEnum, unknown_type_id, CheckedMatchCase, FunctionId, CheckedMatchBody, void_type_id,
-    CheckedVariable, NumberConstant}
+    CheckedVariable, NumberConstant, CheckedEnumVariant}
 import utility { panic, todo, join, prepend_to_each, Span }
 import compiler { Compiler }
 
@@ -32,7 +32,9 @@ enum Usage {
         name: String 
         type_id: TypeId 
         mutability: Mutability 
-        var_type: VarType)
+        var_type: VarType
+        visibility: VarVisibility
+        struct_type_id: TypeId?)
     Call(FunctionId)
     Typename(TypeId)
     NameSet([String])
@@ -103,7 +105,7 @@ function find_type_definition_for_type_id(program: CheckedProgram, type_id: Type
         Enum(id) => program.get_enum(id).name_span
         RawPtr(type_id) => find_type_definition_for_type_id(program, type_id, span)
         TypeVariable() => span
-        GenericResolvedType(id) => program.get_struct(struct_id).name_span
+        GenericResolvedType(id) => program.get_struct(id).name_span
     }
 }
 
@@ -119,6 +121,47 @@ function find_span_in_program(program: CheckedProgram, span: Span) throws -> Usa
     return None
 }
 
+function find_type_definition_in_program(program: CheckedProgram, span: Span) throws -> Span {
+    let result = find_span_in_program(program, span)
+
+    if result.has_value() {
+        return match result! {
+            Variable(span, type_id) => {
+               yield find_type_definition_for_type_id(program, type_id, span) 
+            }
+            Call(function_id) => {
+                yield program.get_function(function_id).name_span
+            }
+            Typename(type_id) => {
+                yield find_type_definition_for_type_id(program, type_id, span)
+            }
+            NameSet() => span
+            EnumVariant(span) => span
+        }
+    } else {
+        return span
+    }
+}
+
+function find_typename_in_program(program: CheckedProgram, span: Span) throws -> String? {
+    let result = find_span_in_program(program, span)
+    
+    if result.has_value() {
+        return match result! {
+            Variable(name, type_id, mutability, var_type, visibility, struct_type_id) => {
+                let result = get_var_signature(program, name, var_type_id: type_id, mutability, var_type, visibility, struct_type_id)
+                yield Some(result)
+            }
+            else => {
+                let none_value: String? = None
+                yield none_value
+            }
+        }
+    } else {
+        return None
+    }
+}
+
 function find_span_in_scope(program: CheckedProgram, scope: Scope, span: Span) throws -> Usage? {
     for scope_var in scope.vars.iterator() {
         let var = program.get_variable(scope_var.1)
@@ -128,8 +171,8 @@ function find_span_in_scope(program: CheckedProgram, scope: Scope, span: Span) t
     }
 
     for function_id in scope.functions.iterator() {
-        let function = program.get_function(function_id.1)
-        let usage = find_span_in_function(program, function, span)
+        let checked_function = program.get_function(function_id.1)
+        let usage = find_span_in_function(program, checked_function, span)
         if usage.has_value() {
             return usage!
         }
@@ -163,40 +206,7 @@ function find_span_in_scope(program: CheckedProgram, scope: Scope, span: Span) t
     return None
 }
 
-function find_span_in_function(program: CheckedProgram, function: CheckedFunction, span: Span) -> Usage? {
-    // FIXME: add return_type_span
-    // if let Some(return_type_span) = function.return_type_span {
-    //     if return_type_span.contains(span) {
-    //         return Some(Usage::Typename(function.return_type_id));
-    //     }
-    // }
-
-    for param in function.params.iterator() {
-        if param.variable.definition_span.contains(span) {
-            return Some(Usage::Typename(param.variable.type_id))
-        }
-    }
-    
-    return find_span_in_block(program, block: function.block, span)
-}
-
-function find_span_in_struct(program: CheckedProgram, checked_struct: CheckedStruct, span: Span) -> Usage? {
-    let scope = program.get_scope(checked_struct.scope_id)
-
-    for field in checked_struct.fields.iterator() {
-        let variable = program.get_variable(field.0)
-
-        if variable.definition_span.contains(span) {
-            return Some(Usage::Typename(field.type_id))
-        }
-    }
-
-    let usage = find_span_in_scope(program, scope, contains(span))
-
-    return usage
-}
-
-function find_span_in_enum(program: CheckedProgram, checked_enum: CheckedEnum, span: Span) -> Usage? {
+function find_span_in_enum(program: CheckedProgram, checked_enum: CheckedEnum, span: Span) throws -> Usage? {
     let scope = program.get_scope(checked_enum.scope_id)
 
     for variant in checked_enum.variants.iterator() {
@@ -206,14 +216,128 @@ function find_span_in_enum(program: CheckedProgram, checked_enum: CheckedEnum, s
                     let var = program.get_variable(field)
 
                     if var.definition_span.contains(span) {
-                        return Some(Usage::Typename(field.type_id))
+                        return Some(Usage::Typename(var.type_id))
                     }
                 }
 
                 if variant_span.contains(span) {
-                    return Some(Usage::EnumVariant())
+                    return Some(Usage::EnumVariant(span, name, type_id: checked_enum.type_id, variants: [], number_constant: None))
+                }
+            }
+            Typed(name, span: variant_span) => {
+                if variant_span.contains(span) {
+                    return Some(Usage::EnumVariant(span: variant_span, name, type_id: checked_enum.type_id, variants: enum_variant_fields(program, checked_enum_variant: variant), number_constant: None))
+                }
+            }
+            Untyped(name, span: variant_span) => {
+                let number_constant_none: NumberConstant? = None
+                return Some(Usage::EnumVariant(span: variant_span, name, type_id: checked_enum.type_id, variants: [], number_constant: number_constant_none))
+            }
+            WithValue(name, expr, span: variant_span) => {
+
+                if variant_span.contains(span) {
+                    return Some(Usage::EnumVariant(span: variant_span, name, type_id: checked_enum.type_id, variants: enum_variant_fields(program, checked_enum_variant: variant), number_constant: expr.to_number_constant(program)))
                 }
             }
         }
+    }
+
+    return None
+}
+
+function find_span_in_struct(program: CheckedProgram, checked_struct: CheckedStruct, span: Span) throws -> Usage? {
+    let scope = program.get_scope(checked_struct.scope_id)
+
+    for field in checked_struct.fields.iterator() {
+        let variable = program.get_variable(field)
+
+        if variable.definition_span.contains(span) {
+            return Some(Usage::Typename(variable.type_id))
+        }
+    }
+
+    let usage = find_span_in_scope(program, scope, span)
+
+    return usage
+}
+
+function find_span_in_function(program: CheckedProgram, checked_function: CheckedFunction, span: Span) -> Usage? {
+    if checked_function.return_type_span.has_value() {
+        if checked_function.return_type_span!.contains(span) {
+            return Some(Usage::Typename(type_id: checked_function.return_type_id))
+        }
+    }
+
+    for param in checked_function.params.iterator() {
+        if param.variable.definition_span.contains(span) {
+            return Some(Usage::Typename(param.variable.type_id))
+        }
+    }
+    
+    //FIXME: return find_span_in_block(program, block: function.block, span)
+    return None
+}
+
+function get_var_signature(program: CheckedProgram, name: String, var_type_id: TypeId, mutability: Mutability, var_type: VarType, visibility: VarVisibility, struct_type_id: TypeId?) throws -> String {
+    return match var_type {
+        Variable => {
+            let mut_string = match mutability {
+                Mutable => "mut"
+                Immutable => "let"
+                else => ""
+            }
+            let type_name = get_type_signature(program, type_id: var_type_id)
+            yield format("{} {}: {}", mut_string, name, type_name)
+        }
+        Field => {
+            mut record_string = ""
+            if struct_type_id.has_value() {
+                record_string = get_type_signature(program, type_id: struct_type_id!)
+            }
+            let visibility_string = match visibility {
+                Public => "public "
+                Private => "private "
+                else => ""
+            }
+
+            let type_name = get_type_signature(program, type_id: var_type_id)
+            if record_string != "" {
+                return format("{}\\n\\t{}{}: {}", record_string, visibility_string, name, type_name)
+            } else {
+                return format("{}{}: {}", visibility_string, name, type_name)
+            }
+        }
+    }
+}
+
+function get_type_signature(program: CheckedProgram, type_id: TypeId) throws -> String {
+    let array_struct_id = program.find_struct_in_prelude("Array")
+    let dictionary_struct_id = program.find_struct_in_prelude("Dictionary")
+    let optional_struct_id = program.find_struct_in_prelude("Optional")
+    let range_struct_id = program.find_struct_in_prelude("Range")
+    let set_struct_id = program.find_struct_in_prelude("Set")
+    let tuple_struct_id = program.find_struct_in_prelude("Tuple")
+    let weak_ptr_struct_id = program.find_struct_in_prelude("WeakPtr")
+
+    return "" // FIXME
+}
+
+function enum_variant_fields(program: CheckedProgram, checked_enum_variant: CheckedEnumVariant) throws -> [(String?, TypeId)] {
+    return match checked_enum_variant {
+        StructLike(fields) => {
+            mut output: [(String?, TypeId)] = []
+            for field in fields.iterator() {
+                let variable = program.get_variable(field)
+                let var_name = Some(variable.name)
+                let o = (var_name, variable.type_id)
+                output.push(o)
+            }
+            yield output
+        }
+        Typed(type_id) => {
+            let string_none: String? = None
+            yield [(string_none, type_id)]
+        }
+        else => []
     }
 }

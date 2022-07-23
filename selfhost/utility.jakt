@@ -50,12 +50,16 @@ struct Span {
     end: usize
 
     function contains(this, span: Span) -> bool {
-        return .file_id == span.file_id and span.start >= .start and span.end <= .end
+        return .file_id.equals(span.file_id) and span.start >= .start and span.end <= .end
     }
 }
 
 struct FileId {
     id: usize
+
+    function equals(this, anon rhs: FileId) -> bool {
+        return .id == rhs.id
+    }
 }
 
 // FIXME: Use jakt stdlib if available
