@@ -1077,6 +1077,123 @@ class CheckedProgram {
             return None
         }
     }
+
+    public function type_name(this, anon type_id: TypeId) throws -> String {
+        let type = .get_type(type_id)
+
+        return match type {
+            F32 => "f32"
+            F64 => "f64"
+            I8 => "i8"
+            I16 => "i16"
+            I32 => "i32"
+            I64 => "i64"
+            U8 => "u8"
+            U16 => "u16"
+            U32 => "u32"
+            U64 => "u64"
+            Usize => "usize"
+            CChar => "c_char"
+            CInt => "c_int"
+            Bool => "bool"
+            Void => "void"
+            Unknown => "unknown"
+            JaktString => "String"
+            Enum(id) => .get_enum(id).name
+            Struct(id) => .get_struct(id).name
+            GenericEnumInstance(id, args) => {
+                mut output = format("enum {}", .get_enum(id).name)
+
+                output += "<"
+                mut first = true
+                for arg in args.iterator() {
+                    if not first {
+                        output += ", "
+                    } else {
+                        first = false
+                    }
+
+                    output += .type_name(arg)
+                }
+
+                output += ">"
+
+                yield output
+            }
+            GenericInstance(id, args) => {
+
+                let array_struct_id = .find_struct_in_prelude("Array")
+                let dictionary_struct_id = .find_struct_in_prelude("Dictionary")
+                let optional_struct_id = .find_struct_in_prelude("Optional")
+                let range_struct_id = .find_struct_in_prelude("Range")
+                let set_struct_id = .find_struct_in_prelude("Set")
+                let tuple_struct_id = .find_struct_in_prelude("Tuple")
+                let weak_ptr_struct_id = .find_struct_in_prelude("WeakPtr")
+
+                mut output = ""
+
+                if id.equals(array_struct_id) {
+                    output = format("[{}]", .type_name(args[0]))
+                } else if id.equals(dictionary_struct_id) {
+                    output = format("[{}:{}]", .type_name(args[0]), .type_name(args[1]))
+                } else if id.equals(optional_struct_id) {
+                    output = format("{}?", .type_name(args[0]))
+                } else if id.equals(range_struct_id) {
+                    output = format("{}..{}", .type_name(args[0]), .type_name(args[0]))
+                } else if id.equals(set_struct_id) {
+                    output = format("{{{}}}", .type_name(args[0]))
+                } else if id.equals(tuple_struct_id) {
+                    output = "("
+                    mut first = true
+                    for arg in args.iterator() {
+                        if not first {
+                            output += ", "
+                        } else {
+                            first = false
+                        }
+                        output += .type_name(arg)
+                    }
+                    output += ")"
+                } else if id.equals(weak_ptr_struct_id) {
+                    output = format("weak {}?", .type_name(args[0]))
+                } else {
+                    let structure = .get_struct(id)
+                    output = structure.name
+                    output += "<"
+                    mut first = true
+                    for arg in args.iterator() {
+                        if not first {
+                            output += ", "
+                        } else {
+                            first = false
+                        }
+                        output += .type_name(arg)
+                    }
+                    output += ">"
+                }
+
+                yield output
+            }
+            GenericResolvedType(id, args) => {
+                mut output = .get_struct(id).name
+                mut first = true
+                output += "<"
+                for arg in args.iterator() {
+                    if not first {
+                        output += ", "
+                    } else {
+                        first = false
+                    }
+                    output += .type_name(type_id)
+                }
+                output += ">"
+
+                yield output
+            }
+            TypeVariable(name) => name
+            RawPtr(type_id) => format("raw {}", .type_name(type_id))
+        }
+    }
 }
 
 struct Typechecker {
@@ -1089,6 +1206,8 @@ struct Typechecker {
     checkidx: usize
     ignore_errors: bool
     dump_type_hints: bool
+
+    function type_name(this, anon type_id: TypeId) throws -> String => .program.type_name(type_id)
 
     function dump_type_hint(this, type_id: TypeId, span: Span) throws {
         println("{{\"type\":\"hint\",\"file_id\":{},\"position\":{},\"typename\":\"{}\"}}"
@@ -1381,122 +1500,6 @@ struct Typechecker {
         return CheckedExpression::NumericConstant(val: new_constant, span, type_id: lhs_type)
     }
 
-    function type_name(this, anon type_id: TypeId) throws -> String {
-        let type = .get_type(type_id)
-
-        return match type {
-            F32 => "f32"
-            F64 => "f64"
-            I8 => "i8"
-            I16 => "i16"
-            I32 => "i32"
-            I64 => "i64"
-            U8 => "u8"
-            U16 => "u16"
-            U32 => "u32"
-            U64 => "u64"
-            Usize => "usize"
-            CChar => "c_char"
-            CInt => "c_int"
-            Bool => "bool"
-            Void => "void"
-            Unknown => "unknown"
-            JaktString => "String"
-            Enum(id) => .get_enum(id).name
-            Struct(id) => .get_struct(id).name
-            GenericEnumInstance(id, args) => {
-                mut output = format("enum {}", .get_enum(id).name)
-
-                output += "<"
-                mut first = true
-                for arg in args.iterator() {
-                    if not first {
-                        output += ", "
-                    } else {
-                        first = false
-                    }
-
-                    output += .type_name(arg)
-                }
-
-                output += ">"
-
-                yield output
-            }
-            GenericInstance(id, args) => {
-
-                let array_struct_id = .find_struct_in_prelude("Array")
-                let dictionary_struct_id = .find_struct_in_prelude("Dictionary")
-                let optional_struct_id = .find_struct_in_prelude("Optional")
-                let range_struct_id = .find_struct_in_prelude("Range")
-                let set_struct_id = .find_struct_in_prelude("Set")
-                let tuple_struct_id = .find_struct_in_prelude("Tuple")
-                let weak_ptr_struct_id = .find_struct_in_prelude("WeakPtr")
-
-                mut output = ""
-
-                if id.equals(array_struct_id) {
-                    output = format("[{}]", .type_name(args[0]))
-                } else if id.equals(dictionary_struct_id) {
-                    output = format("[{}:{}]", .type_name(args[0]), .type_name(args[1]))
-                } else if id.equals(optional_struct_id) {
-                    output = format("{}?", .type_name(args[0]))
-                } else if id.equals(range_struct_id) {
-                    output = format("{}..{}", .type_name(args[0]), .type_name(args[0]))
-                } else if id.equals(set_struct_id) {
-                    output = format("{{{}}}", .type_name(args[0]))
-                } else if id.equals(tuple_struct_id) {
-                    output = "("
-                    mut first = true
-                    for arg in args.iterator() {
-                        if not first {
-                            output += ", "
-                        } else {
-                            first = false
-                        }
-                        output += .type_name(arg)
-                    }
-                    output += ")"
-                } else if id.equals(weak_ptr_struct_id) {
-                    output = format("weak {}?", .type_name(args[0]))
-                } else {
-                    let structure = .get_struct(id)
-                    output = structure.name
-                    output += "<"
-                    mut first = true
-                    for arg in args.iterator() {
-                        if not first {
-                            output += ", "
-                        } else {
-                            first = false
-                        }
-                        output += .type_name(arg)
-                    }
-                    output += ">"
-                }
-
-                yield output
-            }
-            GenericResolvedType(id, args) => {
-                mut output = .program.get_struct(id).name
-                mut first = true
-                output += "<"
-                for arg in args.iterator() {
-                    if not first {
-                        output += ", "
-                    } else {
-                        first = false
-                    }
-                    output += .type_name(type_id)
-                }
-                output += ">"
-
-                yield output
-            }
-            TypeVariable(name) => name
-            RawPtr(type_id) => format("raw {}", .type_name(type_id))
-        }
-    }
 
     // FIXME: not a method of expression because of https://github.com/SerenityOS/jakt/issues/527
     function expression_span(this, anon expr: CheckedExpression) -> Span => match expr {
