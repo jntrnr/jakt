@@ -979,6 +979,35 @@ class CheckedProgram {
         return None
     }
 
+    public function find_enum_in_scope(this, scope_id: ScopeId, name: String) throws -> EnumId? {
+        mut current = scope_id
+
+        loop {
+            let scope = .get_scope(current)
+            let maybe_enum = scope.enums.get(name)
+            if maybe_enum.has_value() {
+                return maybe_enum
+            }
+            for child_id in scope.children.iterator() {
+                let child_scope = .get_scope(id: child_id)
+                if not child_scope.namespace_name.has_value() {
+                    let maybe_enum = child_scope.enums.get(name)
+                    if maybe_enum.has_value() {
+                        return maybe_enum
+                    }
+                }
+            }
+
+            if scope.parent.has_value() {
+                current = scope.parent.value()
+            } else {
+                break
+            }
+        }
+
+        return None
+    }
+
     public function is_integer(this, anon type_id: TypeId) -> bool {
         let type = .get_type(type_id)
 
@@ -1611,34 +1640,6 @@ struct Typechecker {
         return None
     }
 
-    function find_enum_in_scope(this, scope_id: ScopeId, name: String) throws -> EnumId? {
-        mut current = scope_id
-
-        loop {
-            let scope = .get_scope(current)
-            let maybe_enum = scope.enums.get(name)
-            if maybe_enum.has_value() {
-                return maybe_enum
-            }
-            for child_id in scope.children.iterator() {
-                let child_scope = .get_scope(id: child_id)
-                if not child_scope.namespace_name.has_value() {
-                    let maybe_enum = child_scope.enums.get(name)
-                    if maybe_enum.has_value() {
-                        return maybe_enum
-                    }
-                }
-            }
-
-            if scope.parent.has_value() {
-                current = scope.parent.value()
-            } else {
-                break
-            }
-        }
-
-        return None
-    }
 
     // Find the namespace in the current scope, or one of its parents,
     // and whether the found scope was an import.
@@ -1952,7 +1953,7 @@ struct Typechecker {
                     }
 
                 // if it is an enum, add enum to scope
-                let maybe_enum_id = .find_enum_in_scope(
+                let maybe_enum_id = .program.find_enum_in_scope(
                     scope_id: import_scope_id
                     name: imported_name.name
                 )
@@ -2112,7 +2113,7 @@ struct Typechecker {
         for record in parsed_namespace.records.iterator() {
             match record.record_type {
                 SumEnum | ValueEnum => {
-                    let enum_id = .find_enum_in_scope(scope_id, name: record.name)
+                    let enum_id = .program.find_enum_in_scope(scope_id, name: record.name)
                     if not enum_id.has_value() {
                         .compiler.panic("can't find enum that has been previous added")
                     }
@@ -3870,7 +3871,7 @@ struct Typechecker {
             return .find_or_add_type_id(Type::GenericInstance(id: struct_id!, args: checked_inner_types))
         }
 
-        let enum_id = .find_enum_in_scope(scope_id, name)
+        let enum_id = .program.find_enum_in_scope(scope_id, name)
         if enum_id.has_value() {
             return .find_or_add_type_id(Type::GenericEnumInstance(id: enum_id!, args: checked_inner_types))
         }
@@ -5072,7 +5073,7 @@ struct Typechecker {
         for ns in namespace_.iterator() {
             let scope = scopes[scopes.size() - 1]
             let ns_in_scope = .find_namespace_in_scope(scope_id: scope, name: ns)
-            let enum_in_scope = .find_enum_in_scope(scope_id: scope, name: ns)
+            let enum_in_scope = .program.find_enum_in_scope(scope_id: scope, name: ns)
             mut next_scope = scope
             if ns_in_scope.has_value() {
                 next_scope = ns_in_scope!.0
@@ -5841,7 +5842,7 @@ struct Typechecker {
                 current_scope_id = structure.scope_id
                 continue
             }
-            let maybe_enum_scope = .find_enum_in_scope(scope_id: current_scope_id, name: scope_name)
+            let maybe_enum_scope = .program.find_enum_in_scope(scope_id: current_scope_id, name: scope_name)
             if maybe_enum_scope.has_value() {
                 let enum_ = .get_enum(maybe_enum_scope!)
                 current_scope_id = enum_.scope_id
